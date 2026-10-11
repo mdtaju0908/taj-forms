@@ -1,0 +1,13 @@
+{
+  "installCommand": "npm install",
+  "buildCommand": "npm run build",
+  "outputDirectory": "build",
+  "rewrites": [
+    { "source": "/forms/_app/:path*", "destination": "/_app/:path*" },
+    { "source": "/forms", "destination": "/200.html" },
+    { "source": "/forms/:path*", "destination": "/200.html" }
+  ],
+  "headers": [
+    { "source": "/forms/(.*)", "headers": [{ "key": "X-Content-Type-Options", "value": "nosniff" }, { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }, { "key": "X-Frame-Options", "value": "DENY" }] }
+  ]
+}
