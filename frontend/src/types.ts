@@ -2,7 +2,7 @@ export type FieldType = 'short_text' | 'long_text' | 'email' | 'number' | 'dropd
 export type Option = { id: string; label: string }
 export type Answer = string | string[]
 export type FormField = { id: string; type: FieldType; label: string; description: string; placeholder: string; required: boolean; options: Option[] }
-export type FormRecord = { _id: string; title: string; description: string; slug: string; status: 'draft' | 'published' | 'archived'; fields: FormField[]; theme: { accent: string; background: string; layout: 'classic' | 'compact' }; confirmationMessage: string; submissionCount?: number; updatedAt: string }
+export type FormRecord = { _id: string; title: string; description: string; coverImage: string; slug: string; status: 'draft' | 'published' | 'archived'; fields: FormField[]; theme: { accent: string; background: string; layout: 'classic' | 'compact' }; confirmationMessage: string; submissionCount?: number; updatedAt: string }
 export type User = { id: string; email: string; name: string; role: 'user' | 'admin'; status: 'active' | 'suspended' }
 export const fieldTypes: { type: FieldType; label: string; help: string }[] = [
   { type: 'short_text', label: 'Short answer', help: 'A single line of text' },

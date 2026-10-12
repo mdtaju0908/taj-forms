@@ -58,6 +58,7 @@ export const formCreateSchema = z.object({ title: z.string().trim().min(1).max(1
 export const formPatchSchema = z.object({
   title: z.string().trim().min(1).max(120).optional(),
   description: z.string().max(600).optional(),
+  coverImage: z.union([z.literal(''), z.string().max(850000).regex(/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/, 'Upload a PNG, JPEG, or WebP cover image under 600 KB.')]).optional(),
   fields: z.array(formFieldSchema).max(50).optional(),
   definitionVersion: z.literal(1).optional(),
   theme: z.object({ accent: z.string().regex(/^#[0-9a-fA-F]{6}$/), background: z.string().regex(/^#[0-9a-fA-F]{6}$/), layout: z.enum(['classic', 'compact']) }).strict().optional(),

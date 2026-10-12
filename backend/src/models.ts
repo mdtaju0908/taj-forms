@@ -20,6 +20,7 @@ const formSchema = new Schema({
   owner: { type: Schema.Types.ObjectId, ref: 'TajFormsUser', required: true, index: true },
   title: { type: String, required: true, trim: true, maxlength: 120 },
   description: { type: String, default: '', maxlength: 600 },
+  coverImage: { type: String, default: '', maxlength: 850000 },
   slug: { type: String, required: true, unique: true, lowercase: true, index: true },
   status: { type: String, enum: ['draft', 'published', 'archived'], default: 'draft', index: true },
   definitionVersion: { type: Number, default: 1 },

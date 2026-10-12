@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { ArrowLeft, Check, ChevronDown, ChevronUp, Copy, ExternalLink, Eye, GripVertical, Plus, Send, Trash2, Type, X, CalendarDays, Hash, Mail, ListChecks, Star } from 'lucide-react'
+import { ArrowLeft, Check, ChevronDown, ChevronUp, Copy, ExternalLink, Eye, GripVertical, Plus, Send, Trash2, Type, X, CalendarDays, Hash, Mail, ListChecks, Star, ImagePlus } from 'lucide-react'
 import { api } from '../api'
+import { prepareCoverImage } from '../image-utils'
 import { fieldTypes, type FieldType, type FormField, type FormRecord } from '../types'
 
 const id = () => globalThis.crypto?.randomUUID?.() || `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
@@ -41,19 +42,21 @@ export function BuilderPage() {
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved')
   const [notice, setNotice] = useState('')
   const [copyNotice, setCopyNotice] = useState('')
+  const [coverBusy, setCoverBusy] = useState(false)
+  const coverInput = useRef<HTMLInputElement>(null)
   const [preview, setPreview] = useState(false)
   const lastSavedRef = useRef('')
   const saveQueue = useRef(Promise.resolve())
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }))
-  const serialized = useMemo(() => form ? JSON.stringify({ title: form.title, description: form.description, fields: form.fields, theme: form.theme, confirmationMessage: form.confirmationMessage }) : '', [form])
+  const serialized = useMemo(() => form ? JSON.stringify({ title: form.title, description: form.description, coverImage: form.coverImage || '', fields: form.fields, theme: form.theme, confirmationMessage: form.confirmationMessage }) : '', [form])
 
   useEffect(() => {
     let live = true
     setLoaded(false); setForm(null); setNotice(''); setCopyNotice('')
     api<{ data: FormRecord }>(`/forms/${formId}`).then(({ data }) => {
       if (!live) return
-      const normalized = { ...data, fields: Array.isArray(data.fields) ? data.fields : [], theme: data.theme || { accent: '#4f46e5', background: '#f7f8fc', layout: 'classic' } }
-      setForm(normalized); setSelectedId(normalized.fields[0]?.id || ''); lastSavedRef.current = JSON.stringify({ title: normalized.title, description: normalized.description, fields: normalized.fields, theme: normalized.theme, confirmationMessage: normalized.confirmationMessage }); if (normalized.status === 'published') setNotice('Published. Your share link is ready.'); setLoaded(true)
+      const normalized = { ...data, coverImage: data.coverImage || '', fields: Array.isArray(data.fields) ? data.fields : [], theme: data.theme || { accent: '#4f46e5', background: '#f7f8fc', layout: 'classic' } }
+      setForm(normalized); setSelectedId(normalized.fields[0]?.id || ''); lastSavedRef.current = JSON.stringify({ title: normalized.title, description: normalized.description, coverImage: normalized.coverImage, fields: normalized.fields, theme: normalized.theme, confirmationMessage: normalized.confirmationMessage }); if (normalized.status === 'published') setNotice('Published. Your share link is ready.'); setLoaded(true)
     }).catch((error: any) => { setNotice(error.message || 'Could not load this form.'); setLoaded(true) })
     return () => { live = false }
   }, [formId])
@@ -61,10 +64,11 @@ export function BuilderPage() {
   const saveSnapshot = useCallback((snapshot: NonNullable<typeof form>, encoded: string) => {
     setSaveState('saving')
     saveQueue.current = saveQueue.current.then(async () => {
-      await api(`/forms/${formId}`, { method: 'PATCH', body: JSON.stringify({ title: snapshot.title, description: snapshot.description, fields: snapshot.fields, definitionVersion: 1, theme: snapshot.theme, confirmationMessage: snapshot.confirmationMessage }) })
+      await api(`/forms/${formId}`, { method: 'PATCH', body: JSON.stringify({ title: snapshot.title, description: snapshot.description, coverImage: snapshot.coverImage || '', fields: snapshot.fields, definitionVersion: 1, theme: snapshot.theme, confirmationMessage: snapshot.confirmationMessage }) })
       lastSavedRef.current = encoded
       setSaveState('saved')
-    }).catch((error) => { console.error('[TAJ Forms] Autosave failed', error); setSaveState('error') })
+      setNotice((current) => current.startsWith('Autosave failed:') ? '' : current)
+    }).catch((error: any) => { console.error('[TAJ Forms] Autosave failed', error); setSaveState('error'); setNotice(`Autosave failed: ${error.message || 'Please retry saving.'}`) })
   }, [formId])
 
   useEffect(() => {
@@ -106,6 +110,21 @@ export function BuilderPage() {
     const fields = form.fields.filter((field) => field.id !== fieldId)
     setForm({ ...form, fields }); if (selectedId === fieldId) setSelectedId(fields[0]?.id || '')
   }
+  const uploadCover = async (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget
+    const file = input.files?.[0]
+    if (!file) return
+    setCoverBusy(true); setNotice('')
+    try {
+      const coverImage = await prepareCoverImage(file)
+      setForm((current) => current ? { ...current, coverImage } : current)
+    } catch (error: any) {
+      setNotice(error.message || 'Could not process this cover image.')
+    } finally {
+      setCoverBusy(false)
+      input.value = ''
+    }
+  }
   const dragEnd = (event: DragEndEvent) => {
     if (!form || !event.over || event.active.id === event.over.id) return
     const from = form.fields.findIndex((field) => field.id === event.active.id)
@@ -122,33 +141,33 @@ export function BuilderPage() {
     }
     await saveQueue.current
     try {
-      if (serialized !== lastSavedRef.current) await api(`/forms/${formId}`, { method: 'PATCH', body: JSON.stringify({ title: form.title, description: form.description, fields: form.fields, theme: form.theme, confirmationMessage: form.confirmationMessage, definitionVersion: 1 }) })
+      if (serialized !== lastSavedRef.current) await api(`/forms/${formId}`, { method: 'PATCH', body: JSON.stringify({ title: form.title, description: form.description, coverImage: form.coverImage || '', fields: form.fields, theme: form.theme, confirmationMessage: form.confirmationMessage, definitionVersion: 1 }) })
       const { data } = await api<{ data: FormRecord }>(`/forms/${formId}/publish`, { method: 'POST', body: JSON.stringify({}) })
-      setForm(data); lastSavedRef.current = JSON.stringify({ title: data.title, description: data.description, fields: data.fields, theme: data.theme, confirmationMessage: data.confirmationMessage }); setSaveState('saved'); setNotice('Published. Your share link is ready.')
+      setForm(data); lastSavedRef.current = JSON.stringify({ title: data.title, description: data.description, coverImage: data.coverImage || '', fields: data.fields, theme: data.theme, confirmationMessage: data.confirmationMessage }); setSaveState('saved'); setNotice('Published. Your share link is ready.')
     } catch (error: any) { setNotice(error.message || 'Could not publish this form.') }
   }
   const copyShareLink = async () => {
+    if (!form) return
     try { await navigator.clipboard.writeText(`${publicOrigin}/f/${form.slug}`); setCopyNotice('Link copied.') }
     catch { setCopyNotice('Copy failed. Open the form and copy its address from the browser.') }
   }
   if (!loaded) return <main className="workspace-content"><div className="loading-state">Loading form editor…</div></main>
   if (!form) return <main className="workspace-content"><div className="form-error">{notice || 'Form not found.'}</div><Link className="button button-quiet" to="/dashboard">Back to forms</Link></main>
   return <div className="builder-page">
-    <header className="builder-toolbar"><Link to="/dashboard" className="button button-quiet button-small"><ArrowLeft size={14}/> Forms</Link><div className="builder-title">{form.title || 'Untitled form'} <span className={`status-pill status-${form.status}`}>{form.status}</span></div><div className="builder-actions"><span className="save-state" aria-live="polite">{saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed — edit to retry' : <><Check size={12}/> Saved</>}</span><button className="button button-quiet button-small" onClick={() => setPreview((value) => !value)}><Eye size={14}/>{preview ? 'Edit form' : 'Preview'}</button><button className="button button-primary button-small" onClick={() => void publish()} disabled={!form.title.trim() || form.fields.length === 0}>Publish form <Send size={14}/></button></div></header>
+    <header className="builder-toolbar"><Link to="/dashboard" className="button button-quiet button-small"><ArrowLeft size={14}/> Forms</Link><div className="builder-title">{form.title || 'Untitled form'} <span className={`status-pill status-${form.status}`}>{form.status}</span></div><div className="builder-actions"><span className="save-state" aria-live="polite">{saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : <><Check size={12}/> Saved</>}</span>{saveState === 'error' && <button className="button button-quiet button-small" onClick={() => saveSnapshot(form, serialized)}>Retry save</button>}<button className="button button-quiet button-small" onClick={() => setPreview((value) => !value)}><Eye size={14}/>{preview ? 'Edit form' : 'Preview'}</button><button className="button button-primary button-small" onClick={() => void publish()} disabled={!form.title.trim() || form.fields.length === 0}>Publish form <Send size={14}/></button></div></header>
     {notice && <div className={`builder-notice ${notice.startsWith('Published.') ? 'success' : 'error'}`} role="status">{notice}{notice.startsWith('Published.') && <span className="builder-share-actions"><button className="button button-quiet button-small" onClick={() => void copyShareLink()}><Copy size={13}/> Copy link</button><a className="button button-quiet button-small" href={`${publicOrigin}/f/${form.slug}`} target="_blank" rel="noreferrer"><ExternalLink size={13}/> Open form</a>{copyNotice && <span>{copyNotice}</span>}</span>}</div>}
-    {preview ? <div className="public-form" style={{ ['--public-bg' as any]: form.theme.background, ['--public-accent' as any]: form.theme.accent }}><div className={`public-form-card ${form.theme.layout === 'compact' ? 'public-form-compact' : ''}`}><div className="public-form-accent"/><div className="public-form-inner"><div className="public-form-brand"><span className="brand-mark small-mark">T<span>.</span></span><span>TAJ Forms</span></div><h1>{form.title || 'Untitled form'}</h1>{form.description && <p>{form.description}</p>}{form.fields.map((field) => <section className="public-question" key={field.id}><label>{field.label}{field.required && <span className="required-mark"> *</span>}</label>{field.description && <small>{field.description}</small>}<PreviewAnswer field={field}/></section>)}<button className="button button-primary" type="button" disabled>Submit response <Send size={15}/></button></div></div><footer className="public-form-footer">Powered by <strong>TAJ Forms</strong></footer></div> : <div className="builder-grid">
+    {preview ? <div className="public-form" style={{ ['--public-bg' as any]: form.theme.background, ['--public-accent' as any]: form.theme.accent }}><div className={`public-form-card ${form.theme.layout === 'compact' ? 'public-form-compact' : ''}`}>{form.coverImage && <img className="public-form-cover" src={form.coverImage} alt=""/>}<div className="public-form-accent"/><div className="public-form-inner"><div className="public-form-brand"><span className="brand-mark small-mark">T<span>.</span></span><span>TAJ Forms</span></div><h1>{form.title || 'Untitled form'}</h1>{form.description && <p>{form.description}</p>}{form.fields.map((field) => <section className="public-question" key={field.id}><label>{field.label}{field.required && <span className="required-mark"> *</span>}</label>{field.description && <small>{field.description}</small>}<PreviewAnswer field={field}/></section>)}<button className="button button-primary" type="button" disabled>Submit response <Send size={15}/></button></div></div><footer className="public-form-footer">Powered by <strong>TAJ Forms</strong></footer></div> : <div className="builder-grid">
       <aside className="builder-sidebar"><h2>Question type</h2>{fieldTypes.map((item) => <button className="type-button" key={item.type} onClick={() => addField(item.type)}>{optionIcon(item.type)}<span>{item.label}<small>{item.help}</small></span><Plus size={14}/></button>)}<p className="form-note" style={{ padding: '10px 4px' }}>Drag questions to reorder. Keyboard users can use the up/down controls on each question.</p></aside>
-      <section className="builder-canvas" aria-label="Form questions"><div className="canvas-form"><div className="builder-intro" style={{ borderTopColor: form.theme.accent }}><label className="compact-label" htmlFor="form-title">Form title</label><input id="form-title" maxLength={120} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Give your form a clear title"/><textarea maxLength={600} rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="What is this form for?"/><div style={{ display: 'flex', gap: 13, marginTop: 12, alignItems: 'center' }}><label className="form-note">Accent <input aria-label="Accent color" type="color" value={form.theme.accent} onChange={(e) => setForm({ ...form, theme: { ...form.theme, accent: e.target.value } })}/></label><label className="form-note">Background <input aria-label="Background color" type="color" value={form.theme.background} onChange={(e) => setForm({ ...form, theme: { ...form.theme, background: e.target.value } })}/></label><select className="select-input" style={{ width: 'auto', padding: '5px 8px', fontSize: 11 }} value={form.theme.layout} onChange={(e) => setForm({ ...form, theme: { ...form.theme, layout: e.target.value as 'classic' | 'compact' } })}><option value="classic">Classic layout</option><option value="compact">Compact layout</option></select></div></div>
+      <section className="builder-canvas" aria-label="Form questions"><div className="canvas-form"><div className="builder-intro" style={{ borderTopColor: form.theme.accent }}>{form.coverImage && <div className="cover-preview-wrap"><img className="builder-cover-preview" src={form.coverImage} alt="Cover preview"/><button type="button" className="button button-quiet button-small cover-remove" onClick={() => setForm({ ...form, coverImage: '' })}>Remove cover</button></div>}<label className="compact-label" htmlFor="form-title">Form title</label><input id="form-title" maxLength={120} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Give your form a clear title"/><label className="compact-label" htmlFor="form-description">Description</label><textarea id="form-description" maxLength={600} rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="What is this form for?"/><div className="cover-upload-row"><input ref={coverInput} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void uploadCover(event)}/><button type="button" className="button button-quiet button-small" onClick={() => coverInput.current?.click()} disabled={coverBusy}><ImagePlus size={14}/>{coverBusy ? 'Preparing image…' : form.coverImage ? 'Change cover image' : 'Add cover image'}</button><span className="form-note">PNG, JPEG, or WebP · up to 8 MB (resized automatically)</span></div><div className="form-theme-controls"><label className="form-note">Accent <input aria-label="Accent color" type="color" value={form.theme.accent} onChange={(e) => setForm({ ...form, theme: { ...form.theme, accent: e.target.value } })}/></label><label className="form-note">Background <input aria-label="Background color" type="color" value={form.theme.background} onChange={(e) => setForm({ ...form, theme: { ...form.theme, background: e.target.value } })}/></label><label className="form-note layout-select-label">Layout <select className="select-input" value={form.theme.layout} onChange={(e) => setForm({ ...form, theme: { ...form.theme, layout: e.target.value as 'classic' | 'compact' } })}><option value="classic">Classic</option><option value="compact">Compact</option></select></label></div></div>
         {form.fields.length === 0 && <div className="empty-state"><Plus size={24}/><h2>Add your first question</h2><p>Pick a type in the left panel. Your form saves as you work.</p></div>}
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={dragEnd}><SortableContext items={form.fields.map((field) => field.id)} strategy={verticalListSortingStrategy}>{form.fields.map((field) => <SortableQuestion key={field.id} field={field} selected={selectedId === field.id} onSelect={() => setSelectedId(field.id)} onDuplicate={() => duplicateField(field.id)} onDelete={() => deleteField(field.id)} onMove={(direction) => moveField(field.id, direction)}/>)}</SortableContext></DndContext>
         <button className="button button-quiet full-width" onClick={() => addField('short_text')}><Plus size={16}/> Add a question</button>
-        <div className="builder-intro"><label className="compact-label" htmlFor="confirmation">Confirmation after submit</label><textarea id="confirmation" maxLength={500} rows={2} className="text-area" value={form.confirmationMessage} onChange={(e) => setForm({ ...form, confirmationMessage: e.target.value })}/></div>
       </div></section>
       <aside className="settings-panel"><h2>{selected ? 'Question settings' : 'Form settings'}</h2>{selected ? <>
-        <div className="settings-group"><label className="compact-label">Question text</label><input className="compact-input" maxLength={120} value={selected.label} onChange={(e) => editField({ label: e.target.value })}/><label className="compact-label">Helper text</label><input className="compact-input" maxLength={300} value={selected.description} onChange={(e) => editField({ description: e.target.value })}/><label className="compact-label">Placeholder</label><input className="compact-input" maxLength={160} value={selected.placeholder} onChange={(e) => editField({ placeholder: e.target.value })}/><label className="switch-row"><span>Required question</span><input type="checkbox" checked={selected.required} onChange={(e) => editField({ required: e.target.checked })}/></label></div>
-        {['dropdown', 'radio', 'checkbox'].includes(selected.type) && <div className="settings-group"><label className="compact-label">Answer options</label>{selected.options.map((option, index) => <div className="option-edit" key={option.id}><input className="compact-input" maxLength={100} value={option.label} onChange={(e) => editField({ options: selected.options.map((item, i) => i === index ? { ...item, label: e.target.value } : item) })}/><button className="icon-button" aria-label="Remove option" disabled={selected.options.length <= 1} title={selected.options.length <= 1 ? 'Keep at least one option' : 'Remove option'} onClick={() => editField({ options: selected.options.filter((item) => item.id !== option.id) })}><X size={14}/></button></div>)}<button className="button button-quiet button-small" disabled={selected.options.length >= 30} onClick={() => editField({ options: [...selected.options, { id: id(), label: `Option ${selected.options.length + 1}` }] })}><Plus size={13}/> Add option</button><p className="form-note">Add up to 30 choices. Each option needs a label.</p></div>}
+        <div className="settings-group"><label className="compact-label" htmlFor={`question-text-${selected.id}`}>Question text</label><input id={`question-text-${selected.id}`} className="compact-input" maxLength={120} value={selected.label} onChange={(e) => editField({ label: e.target.value })}/><label className="compact-label" htmlFor={`question-help-${selected.id}`}>Helper text</label><input id={`question-help-${selected.id}`} className="compact-input" maxLength={300} value={selected.description} onChange={(e) => editField({ description: e.target.value })}/><label className="compact-label" htmlFor={`question-placeholder-${selected.id}`}>Placeholder</label><input id={`question-placeholder-${selected.id}`} className="compact-input" maxLength={160} value={selected.placeholder} onChange={(e) => editField({ placeholder: e.target.value })}/><label className="switch-row"><span>Required question</span><input type="checkbox" checked={selected.required} onChange={(e) => editField({ required: e.target.checked })}/></label></div>
+        {['dropdown', 'radio', 'checkbox'].includes(selected.type) && <div className="settings-group"><span className="compact-label">Answer options</span>{selected.options.map((option, index) => <div className="option-edit" key={option.id}><input className="compact-input" aria-label={`Option ${index + 1}`} maxLength={100} value={option.label} onChange={(e) => editField({ options: selected.options.map((item, i) => i === index ? { ...item, label: e.target.value } : item) })}/><button className="icon-button" aria-label={`Remove option ${index + 1}`} disabled={selected.options.length <= 1} title={selected.options.length <= 1 ? 'Keep at least one option' : 'Remove option'} onClick={() => editField({ options: selected.options.filter((item) => item.id !== option.id) })}><X size={14}/></button></div>)}<button className="button button-quiet button-small" disabled={selected.options.length >= 30} onClick={() => editField({ options: [...selected.options, { id: id(), label: `Option ${selected.options.length + 1}` }] })}><Plus size={13}/> Add option</button><p className="form-note">Add up to 30 choices. Each option needs a label.</p></div>}
         <button className="button button-danger button-small" onClick={() => deleteField(selected.id)}><Trash2 size={14}/> Delete question</button>
-      </> : <div className="form-note">Select a question to edit it. You can also change the form’s theme in the title card.</div>}</aside>
+      </> : <><div className="form-note">Edit the form title, description, cover image, and appearance in the form card.</div><div className="settings-group"><label className="compact-label" htmlFor="confirmation">Confirmation after submit</label><textarea id="confirmation" maxLength={500} rows={4} className="text-area" value={form.confirmationMessage} onChange={(e) => setForm({ ...form, confirmationMessage: e.target.value })}/><p className="form-note">Shown after a visitor submits the form.</p></div></>}</aside>
     </div>}
   </div>
 }

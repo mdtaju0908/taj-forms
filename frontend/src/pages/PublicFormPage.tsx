@@ -7,7 +7,7 @@ import { api } from '../api'
 import { createFormAnswerSchema } from '../form-utils'
 import type { Answer, FormField, FormRecord } from '../types'
 
-type PublicForm = Pick<FormRecord, 'title' | 'description' | 'slug' | 'fields' | 'theme' | 'confirmationMessage'>
+type PublicForm = Pick<FormRecord, 'title' | 'description' | 'coverImage' | 'slug' | 'fields' | 'theme' | 'confirmationMessage'>
 
 function Question({ field, value, onChange, error }: { field: FormField; value: Answer; onChange: (next: Answer) => void; error?: string }) {
   const name = `field-${field.id}`
@@ -63,7 +63,7 @@ export function PublicFormPage() {
   if (state === 'error') return <main className="public-form" style={style}><div className="public-form-card center-card"><AlertTriangle/><h1>Form unavailable</h1><p>{message}</p></div></main>
   return <main className="public-form" style={style}>
     <article className={`public-form-card ${form?.theme?.layout === 'compact' ? 'public-form-compact' : ''}`}>
-      <div className="public-form-accent"/>
+      {form?.coverImage && <img className="public-form-cover" src={form.coverImage} alt=""/>}<div className="public-form-accent"/>
       {state === 'success' ? <div className="success-box"><CheckCircle2 size={42}/><h1>Response recorded</h1><p>{form?.confirmationMessage}</p></div> : <div className="public-form-inner">
         <div className="public-form-brand"><span className="brand-mark small-mark">T<span>.</span></span><span>TAJ Forms</span></div>
         <h1>{form?.title}</h1>{form?.description && <p>{form.description}</p>}

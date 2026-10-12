@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Archive, ClipboardList, Copy, ExternalLink, FilePlus2, LoaderCircle, MoreHorizontal, Pencil, Search, Send, Trash2 } from 'lucide-react'
 import { api } from '../api'
 import type { FormRecord } from '../types'
@@ -10,6 +10,7 @@ const publicOrigin = (import.meta.env.VITE_PUBLIC_APP_URL as string | undefined)
 
 export function DashboardPage() {
   const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
   const [forms, setForms] = useState<FormRecord[]>([])
   const [page, setPage] = useState(1)
   const [pages, setPages] = useState(1)
@@ -30,7 +31,7 @@ export function DashboardPage() {
   useEffect(() => { void load(page) }, [load, page])
   const create = async () => {
     setBusyId('new'); setNotice('')
-    try { const { data } = await api<{ data: FormRecord }>('/forms', { method: 'POST', body: JSON.stringify({ title: 'Untitled form' }) }); window.location.assign(`${basePath}/builder/${data._id}`) }
+    try { const { data } = await api<{ data: FormRecord }>('/forms', { method: 'POST', body: JSON.stringify({ title: 'Untitled form' }) }); navigate(`/builder/${data._id}`) }
     catch (error: any) { setNotice(error.message || 'Could not create a form.') }
     finally { setBusyId('') }
   }
@@ -41,7 +42,7 @@ export function DashboardPage() {
     try {
       if (action === 'duplicate') {
         const { data } = await api<{ data: FormRecord }>(`/forms/${form._id}/duplicate`, { method: 'POST', body: JSON.stringify({}) })
-        window.location.assign(`${basePath}/builder/${data._id}`); return
+        navigate(`/builder/${data._id}`); return
       }
       if (action === 'delete') await api(`/forms/${form._id}`, { method: 'DELETE' })
       else if (action === 'publish') await api(`/forms/${form._id}/publish`, { method: 'POST', body: JSON.stringify({}) })

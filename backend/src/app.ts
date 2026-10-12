@@ -82,17 +82,17 @@ const ownForm = async (userId: string, formId: string) => {
   if (!Types.ObjectId.isValid(formId)) return null
   return Form.findOne({ _id: formId, owner: new Types.ObjectId(userId) })
 }
-const allocateSlug = async (title: string) => {
+const allocateSlug = async (title: string, excludeFormId?: string) => {
   const base = slugFromTitle(title).slice(0, 48)
   for (let index = 0; index < 8; index += 1) {
     const candidate = index === 0 ? base : `${base}-${randomBytes(3).toString('hex')}`
-    const exists = await Form.exists({ slug: candidate })
+    const exists = await Form.exists(excludeFormId ? { slug: candidate, _id: { $ne: new Types.ObjectId(excludeFormId) } } : { slug: candidate })
     if (!exists) return candidate
   }
   return `${base}-${randomBytes(6).toString('hex')}`
 }
 const publicForm = (form: any) => ({
-  title: form.title, description: form.description, slug: form.slug,
+  title: form.title, description: form.description, coverImage: form.coverImage || '', slug: form.slug,
   fields: toPlainFormFields(form.fields), theme: form.theme, confirmationMessage: form.confirmationMessage,
 })
 const formRouter = express.Router()
@@ -173,7 +173,7 @@ formRouter.get('/forms', asyncRoute(async (req, res) => {
   const filter: any = { owner: new Types.ObjectId(userId), status: { $ne: 'archived' } }
   if (['draft', 'published', 'archived'].includes(String(req.query.status))) filter.status = String(req.query.status)
   if (typeof req.query.q === 'string' && req.query.q.trim()) filter.$or = [{ title: { $regex: escapeRegex(req.query.q.trim().slice(0, 80)), $options: 'i' } }, { slug: { $regex: escapeRegex(req.query.q.trim().slice(0, 80)), $options: 'i' } }]
-  const [forms, total] = await Promise.all([Form.find(filter).sort({ updatedAt: -1 }).skip(skip).limit(limit).lean(), Form.countDocuments(filter)])
+  const [forms, total] = await Promise.all([Form.find(filter).select('-coverImage').sort({ updatedAt: -1 }).skip(skip).limit(limit).lean(), Form.countDocuments(filter)])
   const counts = await Submission.aggregate([{ $match: { form: { $in: forms.map((form: any) => form._id) } } }, { $group: { _id: '$form', count: { $sum: 1 } } }])
   const countMap = new Map(counts.map((entry: any) => [String(entry._id), entry.count]))
   res.json({ data: forms.map((form: any) => ({ ...form, submissionCount: countMap.get(String(form._id)) || 0 })), pagination: { page, limit, total, pages: Math.ceil(total / limit) } })
@@ -211,6 +211,9 @@ formRouter.patch('/forms/:formId', asyncRoute(async (req, res) => {
     if (activeCount >= Number(settings.maxFormsPerUser || 20)) return res.status(409).json({ message: `Your plan allows up to ${settings.maxFormsPerUser} active forms. Archive another form before restoring this one.` })
   }
   if (form.status === 'archived' && parsed.data.status !== 'draft') return res.status(409).json({ message: 'Restore the form before editing it.' })
+  if (parsed.data.title !== undefined && parsed.data.title !== form.title && form.status === 'draft') {
+    form.slug = await allocateSlug(parsed.data.title, String(form._id))
+  }
   Object.assign(form, parsed.data)
   if (parsed.data.status === 'archived') { form.archivedAt = new Date(); form.publishedAt = null }
   if (parsed.data.status === 'draft') { form.archivedAt = null; form.publishedAt = null }
@@ -226,7 +229,7 @@ formRouter.post('/forms/:formId/duplicate', asyncRoute(async (req, res) => {
   const settings = await getSettings()
   const count = await Form.countDocuments({ owner: new Types.ObjectId(user.id), status: { $ne: 'archived' } })
   if (count >= Number(settings.maxFormsPerUser || 20)) return res.status(409).json({ message: `Your plan allows up to ${settings.maxFormsPerUser} active forms.` })
-  const duplicate = await Form.create({ owner: new Types.ObjectId(user.id), title: `${original.title} copy`.slice(0, 120), description: original.description, slug: await allocateSlug(`${original.title} copy`), fields: toPlainFormFields(original.fields), theme: original.theme, confirmationMessage: original.confirmationMessage, status: 'draft' })
+  const duplicate = await Form.create({ owner: new Types.ObjectId(user.id), title: `${original.title} copy`.slice(0, 120), description: original.description, coverImage: original.coverImage || '', slug: await allocateSlug(`${original.title} copy`), fields: toPlainFormFields(original.fields), theme: original.theme, confirmationMessage: original.confirmationMessage, status: 'draft' })
   res.status(201).json({ data: duplicate })
 }))
 
@@ -393,7 +396,7 @@ formRouter.get('/admin/forms', asyncRoute(async (req, res) => {
   const q = String(req.query.q || '').trim().slice(0, 80)
   const filter: any = q ? { $or: [{ title: { $regex: escapeRegex(q), $options: 'i' } }, { slug: { $regex: escapeRegex(q), $options: 'i' } }] } : {}
   if (['draft', 'published', 'archived'].includes(String(req.query.status))) filter.status = String(req.query.status)
-  const [data, total] = await Promise.all([Form.find(filter).populate('owner', 'email name').sort({ createdAt: -1 }).skip(skip).limit(limit).lean(), Form.countDocuments(filter)])
+  const [data, total] = await Promise.all([Form.find(filter).select('-coverImage').populate('owner', 'email name').sort({ createdAt: -1 }).skip(skip).limit(limit).lean(), Form.countDocuments(filter)])
   res.json({ data, pagination: { page, limit, total, pages: Math.ceil(total / limit) } })
 }))
 
@@ -451,9 +454,8 @@ export const createApp = () => {
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }))
   app.use(cors({ origin: (origin, callback) => callback(null, !origin || config.allowedOrigins.has(origin)), credentials: true, methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'X-CSRF-Token', 'Accept'] }))
   app.options('*', cors({ origin: (origin, callback) => callback(null, !origin || config.allowedOrigins.has(origin)), credentials: true }))
-  // Max valid form definitions and response payloads can exceed 64 KB.
-  // Keep a bounded 1 MB limit so the documented field/answer limits remain usable.
-  app.use(express.json({ limit: '1mb', strict: true }))
+  // Form definitions may include a resized cover image alongside the questions.
+  app.use(express.json({ limit: '1.5mb', strict: true }))
   app.use(cookieParser())
   app.use((req, res, next) => {
     res.setHeader('Cache-Control', 'no-store')
